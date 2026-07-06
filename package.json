@@ -8,7 +8,7 @@
   "homepage": "https://gateway.stride20k.com",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Marysbrain/x402-gateway-mcp.git"
+    "url": "git+https://github.com/Marysbrain/x402-gateway-mcp.git"
   },
   "keywords": [
     "mcp",
