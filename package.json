@@ -1,0 +1,51 @@
+{
+  "name": "x402-gateway-mcp",
+  "version": "0.1.2",
+  "mcpName": "io.github.Marysbrain/x402-gateway-mcp",
+  "description": "MCP server exposing every x402-gateway data endpoint as a tool, paying per call with a user-supplied wallet (USDC on Base via x402). Built-in per-call and per-session spend caps. Tools: crypto prices, DeFi TVL, on-chain DEX pools, gas, FX rates, US Treasury yields, US weather, WHOIS, DNS, email validation, web-to-markdown extraction, Hacker News, Wikipedia, npm/PyPI package health, token risk scoring, $1 domain dossier reports.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://gateway.stride20k.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Marysbrain/x402-gateway-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "x402",
+    "micropayments",
+    "usdc",
+    "base",
+    "agent-tools",
+    "data-api",
+    "crypto-prices",
+    "web-scraping",
+    "token-risk"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "x402-gateway-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@x402/evm": "2.17.0",
+    "@x402/fetch": "2.17.0",
+    "viem": "2.54.2"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.9",
+    "typescript": "5.9.3"
+  }
+}

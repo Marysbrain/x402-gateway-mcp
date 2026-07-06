@@ -1,0 +1,51 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Marysbrain/x402-gateway-mcp",
+  "title": "Stride20k x402 Data Gateway",
+  "description": "17 pay-per-call data tools via x402 (USDC on Base): crypto, FX, weather, WHOIS, web, token risk.",
+  "websiteUrl": "https://gateway.stride20k.com",
+  "repository": {
+    "url": "https://github.com/Marysbrain/x402-gateway-mcp",
+    "source": "github"
+  },
+  "version": "0.1.2",
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "x402-gateway-mcp",
+      "version": "0.1.2",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "WALLET_PRIVATE_KEY",
+          "description": "Buyer wallet key (fund with a few USDC on Base). Optional: free previews work without it.",
+          "isRequired": false,
+          "isSecret": true,
+          "format": "string"
+        },
+        {
+          "name": "MAX_PER_CALL_USD",
+          "description": "Refuse any single call above this price. Default 0.25; set 1.25 to enable the $1 domain dossier.",
+          "isRequired": false,
+          "format": "number"
+        },
+        {
+          "name": "MAX_SESSION_USD",
+          "description": "Total spend cap per session. Default 2.00.",
+          "isRequired": false,
+          "format": "number"
+        },
+        {
+          "name": "GATEWAY_URL",
+          "description": "Gateway base URL override. Default https://gateway.stride20k.com.",
+          "isRequired": false,
+          "format": "string"
+        }
+      ]
+    }
+  ]
+}
