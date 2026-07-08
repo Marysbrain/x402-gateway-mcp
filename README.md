@@ -1,9 +1,20 @@
 # x402-gateway-mcp
 
-Stdio MCP server that exposes every [x402-gateway](../README.md) data endpoint as an
-MCP tool and **pays for calls with your wallet** (USDC on Base, x402 protocol).
-Tool list is fetched from the gateway's `/.well-known/x402.json` at startup —
-new gateway endpoints appear automatically.
+**The live x402 market feed for agents.** The `x402_market_pulse` tool is
+FREE — no wallet, no payment, no signup: the x402 ecosystem in one snapshot,
+refreshed ~3x/day — service listings by category with week-over-week deltas,
+newly listed services, npm download trends for the core x402 packages,
+protocol release tags, and per-source reliability grades. Every metric
+carries a freshness stamp; a stale source says so instead of pretending.
+
+Behind the feed: every [x402-gateway](https://gateway.stride20k.com) data
+endpoint as an MCP tool that **pays for calls with your wallet** (USDC on
+Base, x402 protocol) — crypto prices, DEX pools, gas, FX, Treasury yields,
+US weather, WHOIS, DNS, email validation, web-to-markdown extraction, token
+risk scores, $1 domain dossiers, and more. Tool list is fetched from the
+gateway's `/.well-known/x402.json` at startup — new gateway endpoints appear
+automatically, and every response is cryptographically signed
+([verify](https://gateway.stride20k.com/llms.txt)).
 
 > ⚠️ **Funded-wallet warning:** `WALLET_PRIVATE_KEY` signs real payments. Use a
 > dedicated wallet holding only small balances (a few dollars of USDC). Never
@@ -35,7 +46,8 @@ new gateway endpoints appear automatically.
 }
 ```
 
-4. Restart the client. Every tool description states its price, e.g.
+4. Restart the client. The free `x402_market_pulse` tool works immediately
+   (no wallet needed); every paid tool description states its price, e.g.
    `[costs $0.005 USDC per call] Get the current USD price of a cryptocurrency…`
 
 ## Spend guardrails

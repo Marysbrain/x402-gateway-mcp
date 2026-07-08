@@ -2,19 +2,19 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Marysbrain/x402-gateway-mcp",
   "title": "Stride20k x402 Data Gateway",
-  "description": "17 pay-per-call data tools via x402 (USDC on Base): crypto, FX, weather, WHOIS, web, token risk.",
+  "description": "The live x402 market feed for agents (free), plus 17 pay-per-call data tools via x402 (USDC on Base): crypto, FX, weather, WHOIS, web, token risk.",
   "websiteUrl": "https://gateway.stride20k.com",
   "repository": {
     "url": "https://github.com/Marysbrain/x402-gateway-mcp",
     "source": "github"
   },
-  "version": "0.1.2",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "x402-gateway-mcp",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"

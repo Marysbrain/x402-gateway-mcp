@@ -44,8 +44,22 @@ interface ManifestEndpoint {
 }
 interface Manifest {
   name: string;
+  links?: Record<string, string>;
   endpoints: ManifestEndpoint[];
 }
+
+/** Track G3: the free market-pulse tool, registered when the gateway
+ *  advertises it in manifest links. No wallet, no payment, no spend caps. */
+const PULSE_TOOL = "x402_market_pulse";
+const pulseToolDef = (path: string) => ({
+  name: PULSE_TOOL,
+  description:
+    "[FREE — no payment, no wallet needed] The live x402 market feed for agents: " +
+    "ecosystem snapshot with service listings by category, week-over-week deltas, " +
+    "newly listed services, x402 npm download trends, and protocol releases. " +
+    `Refreshed ~3x/day by the Stride20k collector. Served from ${path}.`,
+  inputSchema: { type: "object" as const, properties: {} },
+});
 
 /** "/crypto/price/:coinId" -> "crypto_price" */
 function toolName(route: string): string {
@@ -105,21 +119,39 @@ async function main() {
   };
 
   const server = new Server(
-    { name: "x402-gateway-mcp", version: "0.1.0" },
+    { name: "x402-gateway-mcp", version: "0.2.0" },
     { capabilities: { tools: {} } },
   );
 
+  const pulsePath = manifest.links?.market_pulse;
+
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: manifest.endpoints.map((e) => ({
-      name: toolName(e.route),
-      description: `[costs ${e.price} USDC per call] ${e.summary} ${e.description}`,
-      inputSchema: e.inputSchema as { type: "object"; properties: Record<string, unknown> },
-    })),
+    tools: [
+      // The free feed leads (Track G3/G5): it is the reason to install.
+      ...(pulsePath ? [pulseToolDef(pulsePath)] : []),
+      ...manifest.endpoints.map((e) => ({
+        name: toolName(e.route),
+        description: `[costs ${e.price} USDC per call] ${e.summary} ${e.description}`,
+        inputSchema: e.inputSchema as { type: "object"; properties: Record<string, unknown> },
+      })),
+    ],
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const endpoint = byTool.get(req.params.name);
     const fail = (text: string) => ({ content: [{ type: "text" as const, text: redact(text) }], isError: true });
+
+    if (pulsePath && req.params.name === PULSE_TOOL) {
+      // Free route: plain fetch, no payment wrapper, no spend accounting.
+      try {
+        const res = await fetch(`${GATEWAY_URL}${pulsePath}`);
+        const body = await res.text();
+        return { content: [{ type: "text" as const, text: redact(body) }], isError: res.status !== 200 };
+      } catch (err) {
+        return fail(`market-pulse fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const endpoint = byTool.get(req.params.name);
     if (!endpoint) return fail(`Unknown tool: ${req.params.name}`);
 
     const priceUsd = parsePriceUsd(endpoint.price);
@@ -135,7 +167,15 @@ async function main() {
     }
 
     try {
-      const res = await getPayingFetch()(url, { method: "GET" });
+      // POST routes (ADR-005) take the tool arguments as a JSON body.
+      const res =
+        endpoint.method === "POST"
+          ? await getPayingFetch()(`${GATEWAY_URL}${endpoint.route}`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(req.params.arguments ?? {}),
+            })
+          : await getPayingFetch()(url, { method: "GET" });
       const body = await res.text();
 
       let paid = false;
