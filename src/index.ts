@@ -27,11 +27,26 @@ import { checkSpend, parsePriceUsd, type SpendConfig, type SpendState } from "./
 
 // Canonical production gateway; override with GATEWAY_URL for local/testnet.
 const GATEWAY_URL = (process.env.GATEWAY_URL ?? "https://gateway.stride20k.com").replace(/\/$/, "");
+/** Caps must be plain numbers. Number("$0.25") is NaN, and NaN loses every
+ *  comparison, so an unvalidated cap of "$0.25" silently authorized unlimited
+ *  spending. Refuse to start rather than run with a guard that isn't guarding —
+ *  this process holds a key that moves the user's money. */
+function requireCapUsd(name: string, raw: string | undefined, fallback: string): number {
+  const value = Number((raw ?? fallback).trim());
+  if (!Number.isFinite(value) || value < 0) {
+    console.error(
+      `[x402-mcp] ${name}="${raw}" is not a valid amount. Use a plain number ` +
+        `like ${fallback} — not "$${fallback}". Refusing to start.`,
+    );
+    process.exit(1);
+  }
+  return value;
+}
 const spendConfig: SpendConfig = {
-  maxPerCallUsd: Number(process.env.MAX_PER_CALL_USD ?? "0.25"),
-  maxSessionUsd: Number(process.env.MAX_SESSION_USD ?? "2.00"),
+  maxPerCallUsd: requireCapUsd("MAX_PER_CALL_USD", process.env.MAX_PER_CALL_USD, "0.25"),
+  maxSessionUsd: requireCapUsd("MAX_SESSION_USD", process.env.MAX_SESSION_USD, "2.00"),
 };
-const spendState: SpendState = { sessionSpentUsd: 0 };
+const spendState: SpendState = { sessionSpentUsd: 0, pendingUsd: 0 };
 
 interface ManifestEndpoint {
   route: string;
@@ -119,7 +134,7 @@ async function main() {
   };
 
   const server = new Server(
-    { name: "x402-gateway-mcp", version: "0.2.0" },
+    { name: "x402-gateway-mcp", version: "0.2.1" },
     { capabilities: { tools: {} } },
   );
 
@@ -166,6 +181,12 @@ async function main() {
       return fail(String(err instanceof Error ? err.message : err));
     }
 
+    // RESERVE before the round trip. The cap check above and the increment
+    // below straddle an await, so without this two concurrent tool calls both
+    // read the same total and both proceed. MCP clients batch calls as a matter
+    // of course, so this needed no hostile input: six parallel $1.00 calls
+    // cleared a $2.00 cap and spent $6.00. Released in the finally.
+    spendState.pendingUsd += priceUsd;
     try {
       // POST routes (ADR-005) take the tool arguments as a JSON body.
       const res =
@@ -187,6 +208,12 @@ async function main() {
         } catch {
           paid = res.status === 200; // settled header unparseable; count conservatively
         }
+      } else {
+        // No settle header, but a 200 from a PAID route still means money moved.
+        // The header is non-standard and a proxy or CDN can strip it; treating
+        // that as "free" left the session cap permanently unreachable while
+        // every call kept settling on-chain. Count it against the user's cap.
+        paid = res.status === 200;
       }
       if (paid) spendState.sessionSpentUsd += priceUsd;
 
@@ -199,6 +226,11 @@ async function main() {
       };
     } catch (err) {
       return fail(`Call failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      // Always release the reservation — the spend, if it happened, has moved
+      // into sessionSpentUsd above. A throw between settlement and here would
+      // otherwise leak the reservation and shrink the cap for the whole session.
+      spendState.pendingUsd -= priceUsd;
     }
   });
 

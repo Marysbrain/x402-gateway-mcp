@@ -23,11 +23,35 @@ import { privateKeyToAccount } from "viem/accounts";
 import { checkSpend, parsePriceUsd } from "./guards.js";
 // Canonical production gateway; override with GATEWAY_URL for local/testnet.
 const GATEWAY_URL = (process.env.GATEWAY_URL ?? "https://gateway.stride20k.com").replace(/\/$/, "");
+/** Caps must be plain numbers. Number("$0.25") is NaN, and NaN loses every
+ *  comparison, so an unvalidated cap of "$0.25" silently authorized unlimited
+ *  spending. Refuse to start rather than run with a guard that isn't guarding —
+ *  this process holds a key that moves the user's money. */
+function requireCapUsd(name, raw, fallback) {
+    const value = Number((raw ?? fallback).trim());
+    if (!Number.isFinite(value) || value < 0) {
+        console.error(`[x402-mcp] ${name}="${raw}" is not a valid amount. Use a plain number ` +
+            `like ${fallback} — not "$${fallback}". Refusing to start.`);
+        process.exit(1);
+    }
+    return value;
+}
 const spendConfig = {
-    maxPerCallUsd: Number(process.env.MAX_PER_CALL_USD ?? "0.25"),
-    maxSessionUsd: Number(process.env.MAX_SESSION_USD ?? "2.00"),
+    maxPerCallUsd: requireCapUsd("MAX_PER_CALL_USD", process.env.MAX_PER_CALL_USD, "0.25"),
+    maxSessionUsd: requireCapUsd("MAX_SESSION_USD", process.env.MAX_SESSION_USD, "2.00"),
 };
-const spendState = { sessionSpentUsd: 0 };
+const spendState = { sessionSpentUsd: 0, pendingUsd: 0 };
+/** Track G3: the free market-pulse tool, registered when the gateway
+ *  advertises it in manifest links. No wallet, no payment, no spend caps. */
+const PULSE_TOOL = "x402_market_pulse";
+const pulseToolDef = (path) => ({
+    name: PULSE_TOOL,
+    description: "[FREE — no payment, no wallet needed] The live x402 market feed for agents: " +
+        "ecosystem snapshot with service listings by category, week-over-week deltas, " +
+        "newly listed services, x402 npm download trends, and protocol releases. " +
+        `Refreshed ~3x/day by the Stride20k collector. Served from ${path}.`,
+    inputSchema: { type: "object", properties: {} },
+});
 /** "/crypto/price/:coinId" -> "crypto_price" */
 function toolName(route) {
     return route
@@ -80,17 +104,33 @@ async function main() {
         }
         return payingFetch;
     };
-    const server = new Server({ name: "x402-gateway-mcp", version: "0.1.0" }, { capabilities: { tools: {} } });
+    const server = new Server({ name: "x402-gateway-mcp", version: "0.2.1" }, { capabilities: { tools: {} } });
+    const pulsePath = manifest.links?.market_pulse;
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
-        tools: manifest.endpoints.map((e) => ({
-            name: toolName(e.route),
-            description: `[costs ${e.price} USDC per call] ${e.summary} ${e.description}`,
-            inputSchema: e.inputSchema,
-        })),
+        tools: [
+            // The free feed leads (Track G3/G5): it is the reason to install.
+            ...(pulsePath ? [pulseToolDef(pulsePath)] : []),
+            ...manifest.endpoints.map((e) => ({
+                name: toolName(e.route),
+                description: `[costs ${e.price} USDC per call] ${e.summary} ${e.description}`,
+                inputSchema: e.inputSchema,
+            })),
+        ],
     }));
     server.setRequestHandler(CallToolRequestSchema, async (req) => {
-        const endpoint = byTool.get(req.params.name);
         const fail = (text) => ({ content: [{ type: "text", text: redact(text) }], isError: true });
+        if (pulsePath && req.params.name === PULSE_TOOL) {
+            // Free route: plain fetch, no payment wrapper, no spend accounting.
+            try {
+                const res = await fetch(`${GATEWAY_URL}${pulsePath}`);
+                const body = await res.text();
+                return { content: [{ type: "text", text: redact(body) }], isError: res.status !== 200 };
+            }
+            catch (err) {
+                return fail(`market-pulse fetch failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+        }
+        const endpoint = byTool.get(req.params.name);
         if (!endpoint)
             return fail(`Unknown tool: ${req.params.name}`);
         const priceUsd = parsePriceUsd(endpoint.price);
@@ -106,8 +146,21 @@ async function main() {
         catch (err) {
             return fail(String(err instanceof Error ? err.message : err));
         }
+        // RESERVE before the round trip. The cap check above and the increment
+        // below straddle an await, so without this two concurrent tool calls both
+        // read the same total and both proceed. MCP clients batch calls as a matter
+        // of course, so this needed no hostile input: six parallel $1.00 calls
+        // cleared a $2.00 cap and spent $6.00. Released in the finally.
+        spendState.pendingUsd += priceUsd;
         try {
-            const res = await getPayingFetch()(url, { method: "GET" });
+            // POST routes (ADR-005) take the tool arguments as a JSON body.
+            const res = endpoint.method === "POST"
+                ? await getPayingFetch()(`${GATEWAY_URL}${endpoint.route}`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify(req.params.arguments ?? {}),
+                })
+                : await getPayingFetch()(url, { method: "GET" });
             const body = await res.text();
             let paid = false;
             const settleHeader = res.headers.get("PAYMENT-RESPONSE");
@@ -119,6 +172,13 @@ async function main() {
                 catch {
                     paid = res.status === 200; // settled header unparseable; count conservatively
                 }
+            }
+            else {
+                // No settle header, but a 200 from a PAID route still means money moved.
+                // The header is non-standard and a proxy or CDN can strip it; treating
+                // that as "free" left the session cap permanently unreachable while
+                // every call kept settling on-chain. Count it against the user's cap.
+                paid = res.status === 200;
             }
             if (paid)
                 spendState.sessionSpentUsd += priceUsd;
@@ -132,6 +192,12 @@ async function main() {
         }
         catch (err) {
             return fail(`Call failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        finally {
+            // Always release the reservation — the spend, if it happened, has moved
+            // into sessionSpentUsd above. A throw between settlement and here would
+            // otherwise leak the reservation and shrink the cap for the whole session.
+            spendState.pendingUsd -= priceUsd;
         }
     });
     await server.connect(new StdioServerTransport());
