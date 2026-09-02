@@ -1,4 +1,50 @@
 /** Spend guardrails — pure so they're trivially testable. */
+/** Conservatively book an authorization that settled or may have settled.
+ * Called before response-body reads so a truncated body cannot erase spend. */
+export function bookAuthorizedSpend(state, amountUsd) {
+    if (!Number.isFinite(amountUsd) || amountUsd < 0)
+        throw new Error("invalid spend amount");
+    state.sessionSpentUsd += amountUsd;
+}
+/** A paid wrapper can return a 5xx after dispatching settlement but before a
+ * definitive receipt arrives. Treat that response as possibly paid even when
+ * an intermediary stripped the gateway's x-payment-state header. */
+export function paymentAccountingState(status, receiptConfirmsSettlement, explicitState) {
+    if (receiptConfirmsSettlement || status === 200)
+        return "paid";
+    if (explicitState === "ambiguous" || status >= 500)
+        return "ambiguous";
+    return "unpaid";
+}
+/** Parse a manifest USD price without floating-point rounding. The gateway
+ *  settles in USDC (six decimals), so sub-micro-dollar prices are refused. */
+export function parsePriceAtomic(price) {
+    const raw = price.trim().replace(/^\$/, "").trim();
+    if (!/^(?:0|[1-9]\d*)(?:\.\d{1,6})?$/.test(raw))
+        return null;
+    const [whole = "", fraction = ""] = raw.split(".");
+    return BigInt(whole) * 1000000n + BigInt(fraction.padEnd(6, "0"));
+}
+/** Select only a requirement that is byte-for-byte consistent with the
+ *  manifest price and payment identity. This function is called by x402
+ *  immediately before it creates a wallet signature; the free manifest alone
+ *  is never treated as authorization to spend. */
+export function selectBoundPaymentRequirement(x402Version, requirements, expected) {
+    if (x402Version !== 2)
+        throw new Error("Refused payment: only x402 v2 is supported");
+    const match = requirements.find((r) => {
+        if (r.scheme !== "exact" || r.amount === undefined || !/^\d+$/.test(r.amount))
+            return false;
+        return (BigInt(r.amount) === expected.amountAtomic &&
+            r.network === expected.network &&
+            r.asset.toLowerCase() === expected.asset.toLowerCase() &&
+            r.payTo.toLowerCase() === expected.payTo.toLowerCase());
+    });
+    if (!match) {
+        throw new Error("Refused payment: the live 402 amount or destination does not match the trusted manifest");
+    }
+    return match;
+}
 export function parsePriceUsd(price) {
     // Trim first: " $0.005" used to fail the ^\$ anchor and parse as NaN.
     const raw = price.trim().replace(/^\$/, "").trim();

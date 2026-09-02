@@ -11,6 +11,8 @@
  *   WALLET_PRIVATE_KEY   buyer key — SMALL BALANCES ONLY; signs real payments
  *   MAX_PER_CALL_USD     per-call spend cap (default 0.25)
  *   MAX_SESSION_USD      session spend cap (default 2.00)
+ *   EXPECTED_PAY_TO      pinned treasury address (production default built in)
+ *   EXPECTED_SIGNING_KID pinned gateway signing-key id (production default)
  *
  * The private key is never logged; payment headers are never echoed.
  */
@@ -23,10 +25,27 @@ import {
 import { wrapFetchWithPaymentFromConfig, decodePaymentResponseHeader } from "@x402/fetch";
 import { ExactEvmScheme } from "@x402/evm/exact/client";
 import { privateKeyToAccount } from "viem/accounts";
-import { checkSpend, parsePriceUsd, type SpendConfig, type SpendState } from "./guards.js";
+import {
+  checkSpend,
+  bookAuthorizedSpend,
+  paymentAccountingState,
+  parsePriceAtomic,
+  parsePriceUsd,
+  selectBoundPaymentRequirement,
+  type SpendConfig,
+  type SpendState,
+} from "./guards.js";
+import {
+  DEFAULT_EXPECTED_SIGNING_KID,
+  MANIFEST_SIGNATURE_HEADER,
+  SIGNING_KEY_PATH,
+  verifyManifestSignature,
+  type SigningKeyDocument,
+} from "./manifest-trust.js";
+import { buildTargetUrl } from "./url.js";
 
 // Canonical production gateway; override with GATEWAY_URL for local/testnet.
-const GATEWAY_URL = (process.env.GATEWAY_URL ?? "https://gateway.stride20k.com").replace(/\/$/, "");
+const GATEWAY_URL = (process.env.GATEWAY_URL ?? "https://pulse.aye.today").replace(/\/$/, "");
 /** Caps must be plain numbers. Number("$0.25") is NaN, and NaN loses every
  *  comparison, so an unvalidated cap of "$0.25" silently authorized unlimited
  *  spending. Refuse to start rather than run with a guard that isn't guarding —
@@ -59,9 +78,21 @@ interface ManifestEndpoint {
 }
 interface Manifest {
   name: string;
+  payment: {
+    x402Version: number;
+    scheme: string;
+    network: string;
+    asset: string;
+    payTo: string;
+  };
   links?: Record<string, string>;
   endpoints: ManifestEndpoint[];
 }
+
+const BASE_MAINNET_USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+const DEFAULT_EXPECTED_PAY_TO = "0x552Cc4A10878C7F20574489D47184249657Ca3f6";
+const EXPECTED_PAY_TO = (process.env.EXPECTED_PAY_TO ?? DEFAULT_EXPECTED_PAY_TO).toLowerCase();
+const EXPECTED_SIGNING_KID = process.env.EXPECTED_SIGNING_KID ?? DEFAULT_EXPECTED_SIGNING_KID;
 
 /** Track G3: the free market-pulse tool, registered when the gateway
  *  advertises it in manifest links. No wallet, no payment, no spend caps. */
@@ -72,7 +103,7 @@ const pulseToolDef = (path: string) => ({
     "[FREE — no payment, no wallet needed] The live x402 market feed for agents: " +
     "ecosystem snapshot with service listings by category, week-over-week deltas, " +
     "newly listed services, x402 npm download trends, and protocol releases. " +
-    `Refreshed ~3x/day by the Stride20k collector. Served from ${path}.`,
+    `Refreshed ~3x/day by Aye Pulse. Served from ${path}.`,
   inputSchema: { type: "object" as const, properties: {} },
 });
 
@@ -85,56 +116,76 @@ function toolName(route: string): string {
     .replace(/[^a-zA-Z0-9_]/g, "_");
 }
 
-function buildUrl(endpoint: ManifestEndpoint, args: Record<string, unknown>): string {
-  let path = endpoint.route;
-  const used = new Set<string>();
-  path = path.replace(/:([a-zA-Z_][a-zA-Z0-9_]*)/g, (_, name: string) => {
-    used.add(name);
-    const v = args[name];
-    if (v === undefined) throw new Error(`missing required parameter: ${name}`);
-    return encodeURIComponent(String(v));
-  });
-  const query = new URLSearchParams();
-  for (const [k, v] of Object.entries(args)) {
-    if (!used.has(k) && v !== undefined && v !== null) query.set(k, String(v));
-  }
-  const qs = query.toString();
-  return `${GATEWAY_URL}${path}${qs ? `?${qs}` : ""}`;
-}
-
 /** Belt-and-braces: strip anything key-shaped from text we return to agents. */
 const redact = (s: string) => s.replace(/0x[a-fA-F0-9]{64}/g, "0x[REDACTED]");
 
 async function main() {
+  const gatewayOrigin = new URL(GATEWAY_URL);
+  if (gatewayOrigin.protocol !== "https:" && gatewayOrigin.hostname !== "localhost" && gatewayOrigin.hostname !== "127.0.0.1") {
+    console.error("GATEWAY_URL must use HTTPS outside local development; refusing to load paid tools");
+    process.exit(1);
+  }
   // Manifest fetch (free route) — tool list derives entirely from it.
   const manifestRes = await fetch(`${GATEWAY_URL}/.well-known/x402.json`);
   if (!manifestRes.ok) {
     console.error(`Failed to fetch gateway manifest from ${GATEWAY_URL}: HTTP ${manifestRes.status}`);
     process.exit(1);
   }
-  const manifest = (await manifestRes.json()) as Manifest;
+  if (new URL(manifestRes.url).origin !== gatewayOrigin.origin) {
+    throw new Error("Gateway manifest redirected to a different origin");
+  }
+  const manifestBody = await manifestRes.text();
+  const keyRes = await fetch(`${GATEWAY_URL}${SIGNING_KEY_PATH}`);
+  if (!keyRes.ok || new URL(keyRes.url).origin !== gatewayOrigin.origin) {
+    throw new Error("Gateway signing key is unavailable or redirected");
+  }
+  const keyDocument = (await keyRes.json()) as SigningKeyDocument;
+  await verifyManifestSignature(
+    manifestBody,
+    manifestRes.headers.get(MANIFEST_SIGNATURE_HEADER),
+    keyDocument,
+    EXPECTED_SIGNING_KID,
+  );
+  const manifest = JSON.parse(manifestBody) as Manifest;
+  if (
+    manifest.payment?.x402Version !== 2 ||
+    manifest.payment?.scheme !== "exact" ||
+    manifest.payment?.network !== "eip155:8453" ||
+    manifest.payment?.asset !== "USDC" ||
+    !/^0x[0-9a-fA-F]{40}$/.test(manifest.payment?.payTo ?? "") ||
+    manifest.payment.payTo.toLowerCase() !== EXPECTED_PAY_TO
+  ) {
+    console.error("Gateway manifest payment identity is missing or unsupported; refusing to load paid tools");
+    process.exit(1);
+  }
   const byTool = new Map(manifest.endpoints.map((e) => [toolName(e.route), e]));
 
   // Paying fetch is built lazily so listing tools works without a wallet.
-  let payingFetch: typeof fetch | null = null;
-  const getPayingFetch = (): typeof fetch => {
+  let payingAccount: ReturnType<typeof privateKeyToAccount> | null = null;
+  const getPayingFetch = (endpoint: ManifestEndpoint): typeof fetch => {
     const key = process.env.WALLET_PRIVATE_KEY;
     if (!key) {
       throw new Error(
         "WALLET_PRIVATE_KEY is not configured — cannot pay for calls. Set it in the MCP server env (testnet/small balance only).",
       );
     }
-    if (!payingFetch) {
-      const account = privateKeyToAccount(key as `0x${string}`);
-      payingFetch = wrapFetchWithPaymentFromConfig(fetch, {
-        schemes: [{ network: "eip155:*", client: new ExactEvmScheme(account) }],
-      }) as typeof fetch;
-    }
-    return payingFetch;
+    if (!payingAccount) payingAccount = privateKeyToAccount(key as `0x${string}`);
+    const amountAtomic = parsePriceAtomic(endpoint.price);
+    if (amountAtomic === null) throw new Error(`Gateway advertised an unsafe price: ${endpoint.price}`);
+    return wrapFetchWithPaymentFromConfig(fetch, {
+      schemes: [{ network: "eip155:8453", client: new ExactEvmScheme(payingAccount) }],
+      paymentRequirementsSelector: (version, requirements) =>
+        selectBoundPaymentRequirement(version, requirements, {
+          amountAtomic,
+          network: manifest.payment.network,
+          asset: BASE_MAINNET_USDC,
+          payTo: manifest.payment.payTo,
+        }),
+    }) as typeof fetch;
   };
 
   const server = new Server(
-    { name: "x402-gateway-mcp", version: "0.2.1" },
+    { name: "x402-gateway-mcp", version: "0.3.0" },
     { capabilities: { tools: {} } },
   );
 
@@ -176,7 +227,7 @@ async function main() {
 
     let url: string;
     try {
-      url = buildUrl(endpoint, (req.params.arguments ?? {}) as Record<string, unknown>);
+      url = buildTargetUrl(GATEWAY_URL, endpoint, (req.params.arguments ?? {}) as Record<string, unknown>);
     } catch (err) {
       return fail(String(err instanceof Error ? err.message : err));
     }
@@ -187,18 +238,17 @@ async function main() {
     // of course, so this needed no hostile input: six parallel $1.00 calls
     // cleared a $2.00 cap and spent $6.00. Released in the finally.
     spendState.pendingUsd += priceUsd;
+    let booked = false;
     try {
       // POST routes (ADR-005) take the tool arguments as a JSON body.
       const res =
         endpoint.method === "POST"
-          ? await getPayingFetch()(`${GATEWAY_URL}${endpoint.route}`, {
+          ? await getPayingFetch(endpoint)(url, {
               method: "POST",
               headers: { "content-type": "application/json" },
               body: JSON.stringify(req.params.arguments ?? {}),
             })
-          : await getPayingFetch()(url, { method: "GET" });
-      const body = await res.text();
-
+          : await getPayingFetch(endpoint)(url, { method: "GET" });
       let paid = false;
       const settleHeader = res.headers.get("PAYMENT-RESPONSE");
       if (settleHeader) {
@@ -215,17 +265,33 @@ async function main() {
         // every call kept settling on-chain. Count it against the user's cap.
         paid = res.status === 200;
       }
-      if (paid) spendState.sessionSpentUsd += priceUsd;
+      const accounting = paymentAccountingState(
+        res.status, paid, res.headers.get("x-payment-state"));
+      const ambiguous = accounting === "ambiguous";
+      paid = accounting === "paid";
+      if (paid || ambiguous) {
+        bookAuthorizedSpend(spendState, priceUsd);
+        booked = true;
+      }
+      // Book the receipt (or explicit ambiguity) BEFORE consuming the body. A
+      // body-stream failure after settlement must not restore session capacity.
+      const body = await res.text();
 
-      const note = paid
-        ? `\n\n[paid ${endpoint.price}; session spend $${spendState.sessionSpentUsd.toFixed(3)} of $${spendConfig.maxSessionUsd}]`
+      const note = paid || ambiguous
+        ? `\n\n[${ambiguous ? "possibly paid — reconcile; do not repay" : `paid ${endpoint.price}`}; session reserved/spent $${spendState.sessionSpentUsd.toFixed(3)} of $${spendConfig.maxSessionUsd}]`
         : "";
       return {
         content: [{ type: "text" as const, text: redact(body) + note }],
         isError: res.status !== 200,
       };
     } catch (err) {
-      return fail(`Call failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (!booked) {
+        // The paying wrapper may have dispatched settlement before the transport
+        // error surfaced. Reserve the full authorization and stop optimistic reuse.
+        bookAuthorizedSpend(spendState, priceUsd);
+        booked = true;
+      }
+      return fail(`Call failed after payment authorization; $${priceUsd.toFixed(6)} is reserved as possibly spent. Do not retry until reconciled: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       // Always release the reservation — the spend, if it happened, has moved
       // into sessionSpentUsd above. A throw between settlement and here would
