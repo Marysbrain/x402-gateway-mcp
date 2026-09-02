@@ -7,14 +7,16 @@ newly listed services, npm download trends for the core x402 packages,
 protocol release tags, and per-source reliability grades. Every metric
 carries a freshness stamp; a stale source says so instead of pretending.
 
-Behind the feed: every [x402-gateway](https://gateway.stride20k.com) data
-endpoint as an MCP tool that **pays for calls with your wallet** (USDC on
-Base, x402 protocol) — crypto prices, DEX pools, gas, FX, Treasury yields,
-US weather, WHOIS, DNS, email validation, web-to-markdown extraction, token
-risk scores, $1 domain dossiers, and more. Tool list is fetched from the
-gateway's `/.well-known/x402.json` at startup — new gateway endpoints appear
-automatically, and every response is cryptographically signed
-([verify](https://gateway.stride20k.com/llms.txt)).
+Behind the feed, [Aye Scout](https://pulse.aye.today) exposes two paid
+pre-payment diligence tools: x402 category coverage and a resource preflight
+that checks reachability, terms, catalog presence, and observed age before an
+agent spends. The tool list is fetched from the signed public manifest at
+startup; compatibility-only routes are deliberately absent
+([verify](https://pulse.aye.today/llms.txt)).
+
+The manifest is verified over its exact response bytes before any paid tools
+are registered. Both the treasury address and gateway signing-key ID are
+pinned; an unsigned manifest or an unexpected key rotation stops startup.
 
 > ⚠️ **Funded-wallet warning:** `WALLET_PRIVATE_KEY` signs real payments. Use a
 > dedicated wallet holding only small balances (a few dollars of USDC). Never
@@ -48,14 +50,11 @@ automatically, and every response is cryptographically signed
 
 4. Restart the client. The free `x402_market_pulse` tool works immediately
    (no wallet needed); every paid tool description states its price, e.g.
-   `[costs $0.005 USDC per call] Get the current USD price of a cryptocurrency…`
+   `[costs $0.01 USDC per call] Score an x402 resource before paying it…`
 
 ## Spend guardrails
 
 - `MAX_PER_CALL_USD` (default **0.25**): tools priced above this are refused.
-  Note: the gateway's premium `/report/domain` dossier costs **$1.00** — set
-  `MAX_PER_CALL_USD=1.25` to enable it; the default deliberately keeps
-  premium tools opt-in.
 - `MAX_SESSION_USD` (default **2.00**): cumulative settled spend per server
   session; calls that would exceed it are refused with a clear message the
   agent can relay. Restart the server to reset.
@@ -66,7 +65,13 @@ Refusals happen **before** any payment is signed.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `GATEWAY_URL` | `https://gateway.stride20k.com` | Gateway base URL (override for local/testnet) |
+| `GATEWAY_URL` | `https://pulse.aye.today` | Gateway base URL (override for local/testnet) |
 | `WALLET_PRIVATE_KEY` | — | Buyer key (small balance!). Without it, tools list but calls fail with a clear error |
 | `MAX_PER_CALL_USD` | `0.25` | Per-call cap |
 | `MAX_SESSION_USD` | `2.00` | Per-session cap |
+| `EXPECTED_PAY_TO` | Aye treasury address | Pinned payment destination; override only for a controlled test deployment |
+| `EXPECTED_SIGNING_KID` | Aye production key ID | Pinned manifest signing key; rotate only with an audited gateway release |
+
+If a transport or body-read error occurs after payment authorization, the MCP
+reserves the full advertised amount as possibly spent. It will not silently
+restore that session capacity; reconcile the wallet before retrying.

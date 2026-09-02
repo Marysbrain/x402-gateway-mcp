@@ -1,20 +1,20 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.Marysbrain/x402-gateway-mcp",
-  "title": "Stride20k x402 Data Gateway",
-  "description": "The live x402 market feed for agents, plus 22 pay-per-call data and analytics tools on Base.",
-  "websiteUrl": "https://gateway.stride20k.com",
+  "title": "Aye Pulse + Scout",
+  "description": "Independent x402 market intelligence plus two scoped pre-payment diligence tools on Base.",
+  "websiteUrl": "https://pulse.aye.today",
   "repository": {
     "url": "https://github.com/Marysbrain/x402-gateway-mcp",
     "source": "github"
   },
-  "version": "0.2.1",
+  "version": "0.3.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "x402-gateway-mcp",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "runtimeHint": "npx",
       "transport": {
         "type": "stdio"
@@ -41,7 +41,7 @@
         },
         {
           "name": "GATEWAY_URL",
-          "description": "Gateway base URL override. Default https://gateway.stride20k.com.",
+          "description": "Gateway base URL override. Default https://pulse.aye.today.",
           "isRequired": false,
           "format": "string"
         }
