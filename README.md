@@ -1,35 +1,40 @@
 # x402-gateway-mcp
 
-**The live x402 market feed for agents.** The `x402_market_pulse` tool is
-FREE — no wallet, no payment, no signup: the x402 ecosystem in one snapshot,
-refreshed ~3x/day — service listings by category with week-over-week deltas,
-newly listed services, npm download trends for the core x402 packages,
-protocol release tags, and per-source reliability grades. Every metric
-carries a freshness stamp; a stale source says so instead of pretending.
+A provider-neutral stdio [Model Context Protocol](https://modelcontextprotocol.io/)
+server for [Aye Pulse and Scout](https://pulse.aye.today).
 
-Behind the feed, [Aye Scout](https://pulse.aye.today) exposes two paid
-pre-payment diligence tools: x402 category coverage and a resource preflight
-that checks reachability, terms, catalog presence, and observed age before an
-agent spends. The tool list is fetched from the signed public manifest at
-startup; compatibility-only routes are deliberately absent
-([verify](https://pulse.aye.today/llms.txt)).
+The free `x402_market_pulse` tool returns a freshness-stamped x402 ecosystem
+snapshot. The signed public gateway manifest currently adds two paid diligence
+tools: category coverage and a resource preflight. Compatibility-only gateway
+routes are intentionally not exposed by this package.
 
-The manifest is verified over its exact response bytes before any paid tools
-are registered. Both the treasury address and gateway signing-key ID are
-pinned; an unsigned manifest or an unexpected key rotation stops startup.
+Before registering paid tools, the server verifies the manifest over its exact
+response bytes and checks its pinned signing-key ID and treasury address. An
+unsigned manifest, unexpected key rotation, or mismatched payment requirement
+fails closed.
 
-> ⚠️ **Funded-wallet warning:** `WALLET_PRIVATE_KEY` signs real payments. Use a
-> dedicated wallet holding only small balances (a few dollars of USDC). Never
-> your main wallet. The key is read from env, never logged, and payment headers
-> are never echoed into agent-visible output.
+> **Funded-wallet warning:** `WALLET_PRIVATE_KEY` signs real payments. Use a
+> dedicated wallet with only a small USDC balance, never a primary wallet. The
+> key is read from the environment and is not logged. Payment authorization
+> headers are not returned in tool output.
 
-## 5-minute setup (Claude Desktop / Claude Code)
+## Client and model compatibility
 
-1. Create a fresh wallet and fund it with a small amount of USDC on Base
-   (or Base Sepolia test USDC from <https://faucet.circle.com> while testing).
-2. `npm install -g x402-gateway-mcp` (or use `npx`).
-3. Add to your MCP config (Claude Desktop `claude_desktop_config.json`, or
-   `claude mcp add` for Claude Code):
+The server does not hardcode or call a model. It works with MCP hosts that can
+launch a local stdio server. That can include Codex sessions using GPT-6 Astra,
+Claude Desktop, Claude Code, and other compatible clients; availability and
+configuration depend on the selected client and account.
+
+This package does not call the OpenAI API or require an OpenAI API key. ChatGPT
+and Codex plan access is separate from API usage and billing; do not assume a
+ChatGPT Business, Pro, or other subscription includes API credits.
+
+## Setup
+
+1. Install with `npm install -g x402-gateway-mcp`, or let the client invoke it
+   with `npx`.
+2. Add a local stdio MCP server to the client. Configuration shapes differ, but
+   the process definition is equivalent to:
 
 ```json
 {
@@ -38,8 +43,6 @@ pinned; an unsigned manifest or an unexpected key rotation stops startup.
       "command": "npx",
       "args": ["-y", "x402-gateway-mcp"],
       "env": {
-        "GATEWAY_URL": "https://<your-gateway-host>",
-        "WALLET_PRIVATE_KEY": "0x<small-balance-wallet-key>",
         "MAX_PER_CALL_USD": "0.25",
         "MAX_SESSION_USD": "2.00"
       }
@@ -48,30 +51,49 @@ pinned; an unsigned manifest or an unexpected key rotation stops startup.
 }
 ```
 
-4. Restart the client. The free `x402_market_pulse` tool works immediately
-   (no wallet needed); every paid tool description states its price, e.g.
-   `[costs $0.01 USDC per call] Score an x402 resource before paying it…`
+3. Restart or reconnect the client. The free `x402_market_pulse` tool needs no
+   wallet. To use a paid tool, create a dedicated small-balance wallet and add
+   `WALLET_PRIVATE_KEY` to the server environment.
+
+Every paid tool description states its price. Calls above either configured cap
+are refused before a payment is signed.
 
 ## Spend guardrails
 
-- `MAX_PER_CALL_USD` (default **0.25**): tools priced above this are refused.
-- `MAX_SESSION_USD` (default **2.00**): cumulative settled spend per server
-  session; calls that would exceed it are refused with a clear message the
-  agent can relay. Restart the server to reset.
+- `MAX_PER_CALL_USD` defaults to `0.25` and limits one call.
+- `MAX_SESSION_USD` defaults to `2.00` and limits settled or possibly settled
+  spend for one server process. Restarting the process resets this local total.
 
-Refusals happen **before** any payment is signed.
+If a transport or body-read error occurs after payment authorization, the
+server conservatively reserves the advertised amount as possibly spent. Check
+the wallet before retrying.
 
-## Env reference
+## Environment variables
 
-| Var | Default | Purpose |
+| Variable | Default | Purpose |
 |---|---|---|
-| `GATEWAY_URL` | `https://pulse.aye.today` | Gateway base URL (override for local/testnet) |
-| `WALLET_PRIVATE_KEY` | — | Buyer key (small balance!). Without it, tools list but calls fail with a clear error |
-| `MAX_PER_CALL_USD` | `0.25` | Per-call cap |
-| `MAX_SESSION_USD` | `2.00` | Per-session cap |
+| `GATEWAY_URL` | `https://pulse.aye.today` | Gateway base URL; override only for a controlled local or test deployment |
+| `WALLET_PRIVATE_KEY` | — | Optional buyer key for paid tools; use a dedicated small-balance wallet |
+| `MAX_PER_CALL_USD` | `0.25` | Per-call spend cap |
+| `MAX_SESSION_USD` | `2.00` | Per-process spend cap |
 | `EXPECTED_PAY_TO` | Aye treasury address | Pinned payment destination; override only for a controlled test deployment |
-| `EXPECTED_SIGNING_KID` | Aye production key ID | Pinned manifest signing key; rotate only with an audited gateway release |
+| `EXPECTED_SIGNING_KID` | Aye production key ID | Pinned manifest signing key; change only with an audited gateway release |
 
-If a transport or body-read error occurs after payment authorization, the MCP
-reserves the full advertised amount as possibly spent. It will not silently
-restore that session capacity; reconcile the wallet before retrying.
+## Development
+
+```sh
+npm ci
+npm test
+npm run typecheck
+npm run verify:dist
+npm run pack:check
+```
+
+`src/` is canonical. `dist/` remains committed because the npm executable points
+to `dist/index.js`; `verify:dist` rebuilds it and fails if generated output is
+not committed.
+
+This repository owns the published `x402-gateway-mcp` package. The gateway
+repository owns the HTTP service and signed manifest; changes to that service
+do not automatically update the installed stdio package. Package publication
+is a separate release step and is not performed by these local checks.

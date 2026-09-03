@@ -22,10 +22,8 @@
     "usdc",
     "base",
     "agent-tools",
-    "data-api",
-    "crypto-prices",
-    "web-scraping",
-    "token-risk"
+    "payment-safety",
+    "resource-preflight"
   ],
   "engines": {
     "node": ">=18"
@@ -39,6 +37,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "verify:dist": "npm run build && git diff --exit-code -- dist",
+    "pack:check": "npm pack --dry-run",
     "prepublishOnly": "npm run build",
     "test": "vitest run"
   },

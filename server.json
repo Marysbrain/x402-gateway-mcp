@@ -29,7 +29,7 @@
         },
         {
           "name": "MAX_PER_CALL_USD",
-          "description": "Refuse any single call above this price. Default 0.25; set 1.25 to enable the $1 domain dossier.",
+          "description": "Refuse any single call above this price. Default 0.25.",
           "isRequired": false,
           "format": "number"
         },
@@ -42,6 +42,18 @@
         {
           "name": "GATEWAY_URL",
           "description": "Gateway base URL override. Default https://pulse.aye.today.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "EXPECTED_PAY_TO",
+          "description": "Pinned payment destination override for a controlled test deployment.",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "EXPECTED_SIGNING_KID",
+          "description": "Pinned manifest signing key ID override for an audited gateway release.",
           "isRequired": false,
           "format": "string"
         }
