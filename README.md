@@ -1,3 +1,15 @@
+# Retired source — recovery reference
+
+Active maintenance moved to the sole maintained private repository [Marysbrain/aye-today](https://github.com/Marysbrain/aye-today), in `packages/mcp/`.
+
+**Do not install or deploy from this retired repository.** The historical instructions below are retained for recovery and reference, not current operations.
+
+Existing public deployments continue unchanged. Repository retirement does not delete or shut down services. Original source and Git history remain preserved; retired repository workflows are disabled.
+
+Retirement notice: 2026-09-03.
+
+---
+
 # x402-gateway-mcp
 
 **The live x402 market feed for agents.** The `x402_market_pulse` tool is
